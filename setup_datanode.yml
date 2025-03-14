@@ -1,0 +1,88 @@
+- name: Setup Hadoop DataNode
+  hosts: new_datanodes
+  become: true
+  become_method: sudo
+  tasks:
+
+    - name: Install Java (for Debian/Ubuntu)
+      apt:
+        name: openjdk-11-jdk
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Install Java (for RHEL/CentOS)
+      yum:
+        name: java-11-openjdk
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Set JAVA_HOME
+      lineinfile:
+        path: /etc/environment
+        line: 'JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64'
+        state: present
+
+    - name: Ensure Hadoop directory exists
+      file:
+        path: "/opt/hadoop"
+        state: directory
+        mode: "0755"
+
+    - name: Download Hadoop 3.4.1
+      get_url:
+        url: "https://dlcdn.apache.org/hadoop/common/hadoop-3.4.1/hadoop-3.4.1.tar.gz"
+        dest: "/opt/hadoop/hadoop-3.4.1.tar.gz"
+        mode: "0644"
+
+    - name: Extract Hadoop
+      unarchive:
+        src: "/opt/hadoop/hadoop-3.4.1.tar.gz"
+        dest: "/opt/hadoop"
+        remote_src: yes
+
+    - name: Set Hadoop environment variables
+      blockinfile:
+        path: /etc/profile
+        block: |
+          export HADOOP_HOME=/opt/hadoop/hadoop-3.4.1
+          export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin
+          export HDFS_NAMENODE_USER=$(whoami)
+          export HDFS_DATANODE_USER=$(whoami)
+          export HDFS_SECONDARYNAMENODE_USER=$(whoami)
+        state: present
+
+    - name: Load new environment variables
+      shell: source /etc/profile
+      args:
+        executable: /bin/bash
+
+    - name: Ensure DataNode storage directory exists
+      file:
+        path: "/data/hdfs/datanode"
+        state: directory
+        mode: "0755"
+
+    - name: Configure DataNode `core-site.xml`
+      copy:
+        dest: "/opt/hadoop/hadoop-3.4.1/etc/hadoop/core-site.xml"
+        content: |
+          <configuration>
+            <property>
+              <name>fs.defaultFS</name>
+              <value>hdfs://_gateway:9000</value>
+            </property>
+          </configuration>
+
+    - name: Configure DataNode `hdfs-site.xml`
+      copy:
+        dest: "/opt/hadoop/hadoop-3.4.1/etc/hadoop/hdfs-site.xml"
+        content: |
+          <configuration>
+            <property>
+              <name>dfs.datanode.data.dir</name>
+              <value>file:///data/hdfs/datanode</value>
+            </property>
+          </configuration>
+
+    - name: Start DataNode Service
+      command: "/opt/hadoop/hadoop-3.4.1/sbin/hadoop-daemon.sh start datanode"
