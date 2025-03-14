@@ -2,6 +2,9 @@
   hosts: new_datanodes
   become: true
   become_method: sudo
+  vars:
+    namenode_ip: "192.168.122.1"
+
   tasks:
 
     - name: Install Java (for Debian/Ubuntu)
@@ -69,7 +72,7 @@
           <configuration>
             <property>
               <name>fs.defaultFS</name>
-              <value>hdfs://_gateway:9000</value>
+              <value>hdfs://{{ namenode_ip }}:9000</value>
             </property>
           </configuration>
 
@@ -82,7 +85,17 @@
               <name>dfs.datanode.data.dir</name>
               <value>file:///data/hdfs/datanode</value>
             </property>
+            <property>
+              <name>dfs.namenode.rpc-address</name>
+              <value>{{ namenode_ip }}:9000</value>
+            </property>
           </configuration>
+
+    - name: Add NameNode IP to /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ namenode_ip }} namenode"
+        state: present
 
     - name: Start DataNode Service
       command: "/opt/hadoop/hadoop-3.4.1/sbin/hadoop-daemon.sh start datanode"
