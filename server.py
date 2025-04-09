@@ -3,7 +3,7 @@ import os
 import subprocess
 
 app = Flask(__name__)
-HDFS_BASE_DIR = "/user/avinash"  # Change this to your HDFS base directory
+HDFS_BASE_DIR = ""  # Change this to your HDFS base directory
 
 def hdfs_exists(path):
     cmd = ["hdfs", "dfs", "-test", "-e", path]
@@ -53,15 +53,46 @@ def create_directory():
 def list_contents():
     data = request.get_json()
     path = data.get("path", "")
-    hdfs_path = f"{HDFS_BASE_DIR}/{path}"
+    hdfs_path = f"{HDFS_BASE_DIR}/{path}".rstrip("/")
+
+    print(f"Listing contents of: {hdfs_path}")
     if not hdfs_exists(hdfs_path):
         return jsonify({"error": "Path does not exist"}), 400
-    
-    cmd = ["hdfs", "dfs", "-ls", "-R", hdfs_path]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    entries = [line.split()[-1] for line in result.stdout.strip().split("\n")[1:]]
-    
-    return jsonify({"contents": entries})
+
+    cmd = ["hdfs", "dfs", "-ls", hdfs_path]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        return jsonify({"error": result.stderr.strip()}), 500
+
+    lines = result.stdout.strip().split("\n")[1:]  # skip first line (like "Found X items")
+
+    entries = []
+    for line in lines:
+        parts = line.split(maxsplit=7)
+        if len(parts) < 8:
+            continue  # skip malformed lines
+
+        permission, _, owner, group, size, date, time, full_path = parts
+        entry_type = "DIRECTORY" if permission.startswith("d") else "FILE"
+        name = full_path.split("/")[-1]
+
+        entries.append({
+            "name": name,
+            "path": full_path,
+            "type": entry_type,
+            "permission": permission,
+            "owner": owner,
+            "group": group,
+            "size": size,
+            "lastModified": f"{date} {time}",
+            "replication": "-",      # add actual value if needed
+            "blockSize": "-",        # add actual value if needed
+            "fileDescription": "N/A" # replace if you store descriptions elsewhere
+        })
+
+    print(f"Entries found: {entries}")
+    return jsonify({ "contents": entries })
 
 @app.route("/delete", methods=["POST"])
 def delete_path():
