@@ -102,6 +102,8 @@ def delete_path():
         return jsonify({"error": "Missing 'path' parameter"}), 400
     
     hdfs_path = f"{HDFS_BASE_DIR}/{path}"
+    print(f"Deleting path: {hdfs_path}")
+    
     if not hdfs_exists(hdfs_path):
         return jsonify({"error": "Path does not exist"}), 400
     
