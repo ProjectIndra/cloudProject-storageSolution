@@ -1,6 +1,8 @@
 from flask import Flask, request, send_file, jsonify
 import os
 import subprocess
+import tempfile
+import shutil
 
 app = Flask(__name__)
 HDFS_BASE_DIR = ""  # Change this to your HDFS base directory
@@ -17,21 +19,99 @@ def is_hdfs_dir(path):
 def upload_file():
     file = request.files.get("file")
     path = request.form.get("path")
+
+    if not file or not path:
+        return jsonify({"error": "Missing file or path parameter"}), 400
+
+    # Sanitize file name and HDFS path
+    filename = os.path.basename(file.filename)  # Removes directory traversal attempts
+    hdfs_path = f"{HDFS_BASE_DIR}/{path}/{filename}"
+
+    # Use a temporary file to safely handle spaces and special characters
+    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+        file.save(temp_file.name)
+        local_path = temp_file.name
+
+    try:
+        # Upload to HDFS
+        cmd = ["hdfs", "dfs", "-put", "-f", local_path, hdfs_path]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            print(f"Error uploading file to HDFS:\n{result.stderr}")
+            return jsonify({"error": "Failed to upload to HDFS"}), 500
+
+    finally:
+        # Always remove the temp file
+        if os.path.exists(local_path):
+            os.remove(local_path)
+
+    if not hdfs_exists(hdfs_path):
+        print(f"File not found in HDFS: {hdfs_path}")
+        return jsonify({"error": "File upload failed"}), 500
+
+    return jsonify({
+        "message": "File uploaded to HDFS successfully",
+        "path": hdfs_path
+    }), 200
+
+
+@app.route("/uploadFolder", methods=["POST"])
+def upload_folder():
+    """
+    User will give a zip file that contains a folder
+    so , this server file will unzip the folder and upload it to HDFS
+    """
+    file = request.files.get("file")
+    path = request.form.get("path")
+
     if not file or not path:
         return jsonify({"error": "Missing file or path parameter"}), 400
     
-    hdfs_path = f"{HDFS_BASE_DIR}/{path}/{file.filename}"
     local_path = f"/tmp/{file.filename}"
     file.save(local_path)
-    
-    cmd = ["hdfs", "dfs", "-put", "-f", local_path, hdfs_path]
-    subprocess.run(cmd, check=True)
+
+    # Unzip the file
+    unzip_dir = f"/tmp/unzipped_{file.filename}"
+    os.makedirs(unzip_dir, exist_ok=True)
+    result = subprocess.run(["unzip", local_path, "-d", unzip_dir], check=True)
+
+    if result.returncode != 0:
+        return jsonify({"error": "Unzipping failed"}), 500
+
+    # Upload the unzipped folder to HDFS
+    hdfs_path = f"{HDFS_BASE_DIR}/{path}/{file.filename}"
+    cmd = ["hdfs", "dfs", "-put", "-f", unzip_dir, hdfs_path]
+    result = subprocess.run(cmd, check=True)
+
+    if result.returncode != 0:
+        return jsonify({"error": "Folder upload failed"}), 500
+
+    # Clean up local files
     os.remove(local_path)
-    
+    subprocess.run(["rm", "-rf", unzip_dir])
+
     if not hdfs_exists(hdfs_path):
-        return jsonify({"error": "File upload failed"}), 500
+        return jsonify({"error": "Folder upload failed"}), 500
+    return jsonify({"message": "Folder uploaded to HDFS successfully", "path": hdfs_path}), 200
+
+@app.route("/download", methods=["POST"])
+def download_file():
+    data = request.get_json()
+    path = data.get("path")
+    if not path:
+        return jsonify({"error": "Missing 'path' parameter"}), 400
     
-    return jsonify({"message": "File uploaded to HDFS successfully", "path": hdfs_path})
+    hdfs_path = f"{HDFS_BASE_DIR}/{path}"
+    local_path = f"/tmp/{os.path.basename(path)}"
+    
+    cmd = ["hdfs", "dfs", "-get", hdfs_path, local_path]
+    subprocess.run(cmd, check=True)
+    
+    if not os.path.exists(local_path):
+        return jsonify({"error": "File download failed"}), 500
+    
+    return send_file(local_path, as_attachment=True)
 
 @app.route("/mkdir", methods=["POST"])
 def create_directory():
@@ -131,6 +211,7 @@ def rename_path():
     
     cmd = ["hdfs", "dfs", "-mv", old_hdfs_path, new_hdfs_path]
     subprocess.run(cmd, check=True)
+    
     
     if not hdfs_exists(new_hdfs_path):
         return jsonify({"error": "Rename failed"}), 500
