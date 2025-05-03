@@ -1,0 +1,15 @@
+name: Run script for HDFS server
+
+on: 
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    runs-on: self-hosted 
+    steps:
+      - name: Run the script to start HDFS server
+        run: |
+          cd /home/avinash/scripts
+          sudo bash storageServerScript.sh
