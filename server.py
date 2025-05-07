@@ -15,6 +15,19 @@ def is_hdfs_dir(path):
     cmd = ["hdfs", "dfs", "-test", "-d", path]
     return subprocess.run(cmd).returncode == 0
 
+@app.route("/removeSafeMode", methods=["GET"])
+def remove_safe_mode():
+    """
+    This endpoint is used to remove the safe mode from HDFS
+    """
+    cmd = ["hdfs", "dfsadmin", "-safemode", "leave"]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    
+    if result.returncode != 0:
+        return jsonify({"error": "Failed to leave safe mode"}), 500
+    
+    return jsonify({"message": "Safe mode removed successfully"}), 200
+
 @app.route("/upload", methods=["POST"])
 def upload_file():
     file = request.files.get("file")
@@ -79,10 +92,9 @@ def upload_folder():
     if result.returncode != 0:
         return jsonify({"error": "Unzipping failed"}), 500
 
-    # Upload the unzipped folder to HDFS
-    hdfs_path = f"{HDFS_BASE_DIR}/{path}/{file.filename}"
-    cmd = ["hdfs", "dfs", "-put", "-f", unzip_dir, hdfs_path]
-    result = subprocess.run(cmd, check=True)
+    # Upload the the contents of the unzipped folder to HDFS
+    hdfs_path = f"{HDFS_BASE_DIR}/{path}"
+    cmd = ["hdfs", "dfs", "-put", "-f", f"{unzip_dir}/*", hdfs_path]
 
     if result.returncode != 0:
         return jsonify({"error": "Folder upload failed"}), 500
@@ -103,15 +115,30 @@ def download_file():
         return jsonify({"error": "Missing 'path' parameter"}), 400
     
     hdfs_path = f"{HDFS_BASE_DIR}/{path}"
-    local_path = f"/tmp/{os.path.basename(path)}"
     
-    cmd = ["hdfs", "dfs", "-get", hdfs_path, local_path]
-    subprocess.run(cmd, check=True)
-    
-    if not os.path.exists(local_path):
-        return jsonify({"error": "File download failed"}), 500
-    
-    return send_file(local_path, as_attachment=True)
+    # Use a temporary file to safely handle spaces and special characters
+    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+        local_path = temp_file.name
+
+    try:
+        # Download from HDFS
+        cmd = ["hdfs", "dfs", "-get", "-f", hdfs_path, local_path]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            print(f"Error downloading file from HDFS:\n{result.stderr}")
+            return jsonify({"error": "Failed to download from HDFS"}), 500
+
+        if not os.path.exists(local_path):
+            print(f"File not found locally after download: {local_path}")
+            return jsonify({"error": "File download failed"}), 500
+
+        return send_file(local_path, as_attachment=True)
+
+    finally:
+        # Always remove the temp file after sending
+        if os.path.exists(local_path):
+            os.remove(local_path)
 
 @app.route("/mkdir", methods=["POST"])
 def create_directory():
